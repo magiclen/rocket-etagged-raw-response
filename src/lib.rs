@@ -32,7 +32,7 @@ use rocket::http::{Status, hyper::header::ETag};
 /// This map should be managed by a rocket instance.
 pub type EtagMap = Mutex<HashMap<String, EntityTag>>;
 
-/// The response struct used for client downloading.
+/// The response struct used for responding raw data with **Etag** cache.
 pub struct EtaggedRawResponse<'a> {
     pub data: Box<Read + 'a>,
     pub is_etag_match: bool,
