@@ -182,7 +182,7 @@ impl<'a> EtaggedRawResponse<'a> {
     }
 
     /// Create a `EtaggedRawResponse` instance from a Vec<u8>.
-    pub fn from_vec<K: Into<String>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, key: S, vec: Vec<u8>, file_name: S, content_type: Option<Mime>) -> EtaggedRawResponse<'static> {
+    pub fn from_vec<K: Into<String>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, key: K, vec: Vec<u8>, file_name: S, content_type: Option<Mime>) -> EtaggedRawResponse<'static> {
         let key = key.into();
 
         let etag = etag_map.lock().unwrap().get(&key).map(|etag| { etag.clone() });
