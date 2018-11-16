@@ -1,0 +1,26 @@
+[package]
+name = "rocket-etagged-raw-response"
+version = "0.1.0"
+authors = ["Magic Len <len@magiclen.org>"]
+repository = "https://github.com/magiclen/rocket-etagged-raw-response"
+homepage = "https://magiclen.org/rocket-etagged-raw-response"
+keywords = ["rocket", "server", "web", "response", "etag"]
+categories = ["web-programming"]
+description= "This crate provides a response struct used for responding raw data with **Etag** cache."
+readme = "README.md"
+license = "MIT"
+
+[badges]
+travis-ci = { repository = "magiclen/rocket-etagged-raw-response", branch = "master" }
+
+[dependencies]
+rocket = ">=0.3.16"
+mime = "0.3.12"
+mime_guess = " 2.0.0-alpha.6"
+percent-encoding = "1.0.1"
+crc-any = "1.1.2"
+
+rocket-etag-if-none-match = "0.2.1"
+
+[dev-dependencies]
+rocket_codegen = ">=0.3.16"
