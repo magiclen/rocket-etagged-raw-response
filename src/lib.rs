@@ -78,7 +78,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse<'a> {
 
 impl<'a> EtaggedRawResponse<'a> {
     /// Create a `EtaggedRawResponse` instance from a path of a file.
-    pub fn from_file<P: AsRef<Path>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, path: P, file_name: Option<S>, content_type: Option<Mime>) -> io::Result<EtaggedRawResponse<'a>> {
+    pub fn from_file<P: AsRef<Path>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, path: P, file_name: Option<S>, content_type: Option<Mime>) -> io::Result<EtaggedRawResponse<'static>> {
         let path = match path.as_ref().canonicalize() {
             Ok(path) => path,
             Err(e) => Err(e)?
@@ -182,7 +182,7 @@ impl<'a> EtaggedRawResponse<'a> {
     }
 
     /// Create a `EtaggedRawResponse` instance from a Vec<u8>.
-    pub fn from_vec<K: Into<String>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, key: S, vec: Vec<u8>, file_name: S, content_type: Option<Mime>) -> io::Result<EtaggedRawResponse<'a>> {
+    pub fn from_vec<K: Into<String>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, key: S, vec: Vec<u8>, file_name: S, content_type: Option<Mime>) -> EtaggedRawResponse<'static> {
         let key = key.into();
 
         let etag = etag_map.lock().unwrap().get(&key).map(|etag| { etag.clone() });
@@ -207,54 +207,54 @@ impl<'a> EtaggedRawResponse<'a> {
         let is_etag_match = etag_if_none_match.weak_eq(&etag);
 
         if is_etag_match {
-            Ok(EtaggedRawResponse {
+            EtaggedRawResponse {
                 data: Box::new(Cursor::new(Vec::new())),
                 is_etag_match: true,
                 etag,
                 file_name: String::new(),
                 content_type: None,
                 content_length: None,
-            })
+            }
         } else {
             let file_name = file_name.into();
 
             let content_length = vec.len();
 
-            Ok(EtaggedRawResponse {
+            EtaggedRawResponse {
                 data: Box::from(Cursor::new(vec)),
                 is_etag_match: false,
                 etag,
                 file_name,
                 content_type,
                 content_length: Some(content_length as u64),
-            })
+            }
         }
     }
 
     /// Create a `EtaggedRawResponse` instance from a reader.
-    pub fn from_reader<R: Read + 'a, S: Into<String>>(etag_if_none_match: EtagIfNoneMatch, etag: EntityTag, reader: R, file_name: S, content_type: Option<Mime>, content_length: Option<u64>) -> io::Result<EtaggedRawResponse<'a>> {
+    pub fn from_reader<R: Read + 'a, S: Into<String>>(etag_if_none_match: EtagIfNoneMatch, etag: EntityTag, reader: R, file_name: S, content_type: Option<Mime>, content_length: Option<u64>) -> EtaggedRawResponse<'a> {
         let is_etag_match = etag_if_none_match.weak_eq(&etag);
 
         if is_etag_match {
-            Ok(EtaggedRawResponse {
+            EtaggedRawResponse {
                 data: Box::new(Cursor::new(Vec::new())),
                 is_etag_match: true,
                 etag,
                 file_name: String::new(),
                 content_type: None,
                 content_length: None,
-            })
+            }
         } else {
             let file_name = file_name.into();
 
-            Ok(EtaggedRawResponse {
+            EtaggedRawResponse {
                 data: Box::from(reader),
                 is_etag_match: false,
                 etag,
                 file_name,
                 content_type,
                 content_length,
-            })
+            }
         }
     }
 }
