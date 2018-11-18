@@ -257,4 +257,9 @@ impl<'a> EtaggedRawResponse<'a> {
             }
         }
     }
+
+    /// Create a new `EtagMap` instance.
+    pub fn new_etag_map() -> EtagMap {
+        EtagMap::new(HashMap::new())
+    }
 }
