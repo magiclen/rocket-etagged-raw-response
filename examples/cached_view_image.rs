@@ -15,6 +15,8 @@ use rocket::request::State;
 fn view(etag_map: State<EtagMap>, etag_if_none_match: EtagIfNoneMatch) -> EtaggedRawResponse<'static> {
     let path = Path::join(Path::new("examples"), Path::join(Path::new("images"), "image(貓).jpg"));
 
+    println!("{:#?}", EtaggedRawResponse::from_file(etag_map.inner(), etag_if_none_match.clone(), path.clone(), None::<String>, None).unwrap());
+
     EtaggedRawResponse::from_file(etag_map.inner(), etag_if_none_match, path, None::<String>, None).unwrap()
 }
 

@@ -6,17 +6,20 @@ This crate provides a response struct used for responding raw data with **Etag**
 See `examples`.
 */
 
+
 pub extern crate mime;
 extern crate mime_guess;
 extern crate percent_encoding;
 extern crate crc_any;
+#[macro_use]
+extern crate derivative;
+
 extern crate rocket;
 extern crate rocket_etag_if_none_match;
 
 use std::io::{self, Read, ErrorKind, Cursor};
 use std::fs::{self, File};
 use std::path::Path;
-use std::fmt::{self, Debug, Formatter};
 use std::sync::Mutex;
 use std::collections::HashMap;
 
@@ -33,19 +36,16 @@ use rocket::http::{Status, hyper::header::ETag};
 pub type EtagMap = Mutex<HashMap<String, EntityTag>>;
 
 /// The response struct used for responding raw data with **Etag** cache.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct EtaggedRawResponse<'a> {
+    #[derivative(Debug = "ignore")]
     pub data: Box<Read + 'a>,
     pub is_etag_match: bool,
     pub etag: EntityTag,
     pub file_name: String,
     pub content_type: Option<Mime>,
     pub content_length: Option<u64>,
-}
-
-impl<'a> Debug for EtaggedRawResponse<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_fmt(format_args!("EtaggedRawResponse {{is_etag_match: {}, etag: {:?}, file_name: {:?}, content_type: {:?}, content_length: {:?}}}", self.is_etag_match, self.etag, self.file_name, self.content_type, self.content_length))
-    }
 }
 
 impl<'a> Responder<'a> for EtaggedRawResponse<'a> {
