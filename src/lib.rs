@@ -6,260 +6,230 @@ This crate provides a response struct used for responding raw data with **Etag**
 See `examples`.
 */
 
+mod key_etag_cache;
+mod file_etag_cache;
+mod fairing;
 
+#[macro_use]
+extern crate derivative;
 pub extern crate mime;
 extern crate mime_guess;
 extern crate percent_encoding;
 extern crate crc_any;
-#[macro_use]
-extern crate derivative;
+extern crate lru_time_cache;
 
 extern crate rocket;
 extern crate rocket_etag_if_none_match;
 
-use std::io::{self, Read, ErrorKind, Cursor};
-use std::fs::{self, File};
+use std::io::{Read, Cursor};
 use std::path::Path;
-use std::sync::Mutex;
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use mime::Mime;
-use crc_any::CRC;
+
+use rocket::State;
+use rocket::response::{self, Response, Responder};
+use rocket::request::Request;
+use rocket::http::Status;
+use rocket::fairing::Fairing;
 
 pub use rocket_etag_if_none_match::{EntityTag, EtagIfNoneMatch};
 
-use rocket::response::{Response, Responder, Result};
-use rocket::request::Request;
-use rocket::http::{Status, hyper::header::ETag};
+pub use key_etag_cache::KeyEtagCache;
+pub use file_etag_cache::FileEtagCache;
+use fairing::EtaggedRawResponseFairing;
+use std::fs::File;
 
-/// This map should be managed by a rocket instance.
-pub type EtagMap = Mutex<HashMap<String, EntityTag>>;
+const DEFAULT_CACHE_CAPACITY: usize = 64;
 
-/// The response struct used for responding raw data with **Etag** cache.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct EtaggedRawResponse<'a> {
-    #[derivative(Debug = "ignore")]
-    pub data: Box<Read + 'a>,
-    pub is_etag_match: bool,
-    pub etag: EntityTag,
-    pub file_name: String,
-    pub content_type: Option<Mime>,
-    pub content_length: Option<u64>,
+enum EtaggedRawResponseData {
+    Vec {
+        data: Vec<u8>,
+        key: Arc<str>,
+    },
+    Reader {
+        #[derivative(Debug = "ignore")]
+        data: Box<Read + 'static>,
+        content_length: Option<u64>,
+        etag: EntityTag,
+    },
+    File(Arc<Path>),
 }
 
-impl<'a> Responder<'a> for EtaggedRawResponse<'a> {
-    fn respond_to(self, _: &Request) -> Result<'a> {
-        let mut response = Response::build();
-
-        if self.is_etag_match {
-            response.status(Status::NotModified);
-        } else {
-            response.header(ETag(self.etag));
-
-            if !self.file_name.is_empty() {
-                response.raw_header("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encoding::percent_encode(self.file_name.as_bytes(), percent_encoding::QUERY_ENCODE_SET)));
-            }
-
-            if let Some(content_type) = self.content_type {
-                response.raw_header("Content-Type", content_type.to_string());
-            }
-
-            if let Some(content_length) = self.content_length {
-                response.raw_header("Content-Length", content_length.to_string());
-            }
-
-            response.streamed_body(self.data);
-        }
-
-        response.ok()
-    }
+#[derive(Debug)]
+pub struct EtaggedRawResponse {
+    client_etag: EtagIfNoneMatch,
+    file_name: Option<String>,
+    content_type: Option<Mime>,
+    data: EtaggedRawResponseData,
 }
 
-impl<'a> EtaggedRawResponse<'a> {
-    /// Create a `EtaggedRawResponse` instance from a path of a file.
-    pub fn from_file<P: AsRef<Path>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, path: P, file_name: Option<S>, content_type: Option<Mime>) -> io::Result<EtaggedRawResponse<'static>> {
-        let path = match path.as_ref().canonicalize() {
-            Ok(path) => path,
-            Err(e) => Err(e)?
-        };
-
-        if !path.is_file() {
-            return Err(io::Error::from(ErrorKind::InvalidInput));
-        }
-
-        let path_str = path.to_str().unwrap();
-
-        let etag = etag_map.lock().unwrap().get(path_str).map(|etag| { etag.clone() });
-
-        let etag = match etag {
-            Some(etag) => etag,
-            None => {
-                let mut crc64ecma = CRC::crc64ecma();
-
-                let mut buffer = [0u8; 4096];
-
-                let mut file = File::open(&path)?;
-
-                loop {
-                    match file.read(&mut buffer) {
-                        Ok(c) => {
-                            if c == 0 {
-                                break;
-                            }
-                            crc64ecma.digest(&buffer[0..c]);
-                        }
-                        Err(error) => {
-                            return Err(error);
-                        }
-                    }
-                }
-
-                drop(file);
-
-                let crc64 = crc64ecma.get_crc();
-
-                let etag = EntityTag::new(true, format!("{:X}", crc64));
-
-                let path_string = path_str.to_string();
-
-                etag_map.lock().unwrap().insert(path_string, etag.clone());
-
-                etag
-            }
-        };
-
-        let is_etag_match = etag_if_none_match.weak_eq(&etag);
-
-        if is_etag_match {
-            Ok(EtaggedRawResponse {
-                data: Box::new(Cursor::new(Vec::new())),
-                is_etag_match: true,
-                etag,
-                file_name: String::new(),
-                content_type: None,
-                content_length: None,
-            })
-        } else {
-            let file_name = match file_name {
-                Some(file_name) => {
-                    let file_name = file_name.into();
-                    file_name
-                }
-                None => {
-                    path.file_name().unwrap().to_str().unwrap().to_string()
-                }
-            };
-
-            let file_size = match fs::metadata(&path) {
-                Ok(metadata) => {
-                    Some(metadata.len())
-                }
-                Err(e) => return Err(e)
-            };
-
-            let content_type = match content_type {
-                Some(content_type) => content_type,
-                None => match path.extension() {
-                    Some(extension) => {
-                        mime_guess::get_mime_type(extension.to_str().unwrap())
-                    }
-                    None => mime::APPLICATION_OCTET_STREAM
-                }
-            };
-
-            let data = Box::from(File::open(&path)?);
-
-            Ok(EtaggedRawResponse {
-                data,
-                is_etag_match: false,
-                etag,
-                file_name,
-                content_type: Some(content_type),
-                content_length: file_size,
-            })
-        }
-    }
-
-    /// Create a `EtaggedRawResponse` instance from a Vec<u8>.
-    pub fn from_vec<K: Into<String>, S: Into<String>>(etag_map: &EtagMap, etag_if_none_match: EtagIfNoneMatch, key: K, vec: Vec<u8>, file_name: S, content_type: Option<Mime>) -> EtaggedRawResponse<'static> {
+impl EtaggedRawResponse {
+    /// Create a `EtaggedRawResponse` instance from a `Vec<u8>`.
+    pub fn from_vec<K: Into<Arc<str>>, S: Into<String>>(client_etag: EtagIfNoneMatch, key: K, vec: Vec<u8>, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
         let key = key.into();
+        let file_name = file_name.map(|file_name| file_name.into());
 
-        let etag = etag_map.lock().unwrap().get(&key).map(|etag| { etag.clone() });
-
-        let etag = match etag {
-            Some(etag) => etag,
-            None => {
-                let mut crc64ecma = CRC::crc64ecma();
-
-                crc64ecma.digest(&vec);
-
-                let crc64 = crc64ecma.get_crc();
-
-                let etag = EntityTag::new(true, format!("{:X}", crc64));
-
-                etag_map.lock().unwrap().insert(key, etag.clone());
-
-                etag
-            }
+        let data = EtaggedRawResponseData::Vec {
+            data: vec,
+            key,
         };
 
-        let is_etag_match = etag_if_none_match.weak_eq(&etag);
-
-        if is_etag_match {
-            EtaggedRawResponse {
-                data: Box::new(Cursor::new(Vec::new())),
-                is_etag_match: true,
-                etag,
-                file_name: String::new(),
-                content_type: None,
-                content_length: None,
-            }
-        } else {
-            let file_name = file_name.into();
-
-            let content_length = vec.len();
-
-            EtaggedRawResponse {
-                data: Box::from(Cursor::new(vec)),
-                is_etag_match: false,
-                etag,
-                file_name,
-                content_type,
-                content_length: Some(content_length as u64),
-            }
+        EtaggedRawResponse {
+            client_etag,
+            file_name,
+            content_type,
+            data,
         }
     }
 
     /// Create a `EtaggedRawResponse` instance from a reader.
-    pub fn from_reader<R: Read + 'a, S: Into<String>>(etag_if_none_match: EtagIfNoneMatch, etag: EntityTag, reader: R, file_name: S, content_type: Option<Mime>, content_length: Option<u64>) -> EtaggedRawResponse<'a> {
-        let is_etag_match = etag_if_none_match.weak_eq(&etag);
+    pub fn from_reader<R: Read + 'static, S: Into<String>>(client_etag: EtagIfNoneMatch, etag: EntityTag, reader: R, file_name: Option<S>, content_type: Option<Mime>, content_length: Option<u64>) -> EtaggedRawResponse {
+        let file_name = file_name.map(|file_name| file_name.into());
 
-        if is_etag_match {
-            EtaggedRawResponse {
-                data: Box::new(Cursor::new(Vec::new())),
-                is_etag_match: true,
-                etag,
-                file_name: String::new(),
-                content_type: None,
-                content_length: None,
-            }
-        } else {
-            let file_name = file_name.into();
+        let data = EtaggedRawResponseData::Reader {
+            data: Box::new(reader),
+            content_length,
+            etag,
+        };
 
-            EtaggedRawResponse {
-                data: Box::from(reader),
-                is_etag_match: false,
-                etag,
-                file_name,
-                content_type,
-                content_length,
-            }
+        EtaggedRawResponse {
+            client_etag,
+            file_name,
+            content_type,
+            data,
         }
     }
 
-    /// Create a new `EtagMap` instance.
-    pub fn new_etag_map() -> EtagMap {
-        EtagMap::new(HashMap::new())
+    /// Create a `EtaggedRawResponse` instance from a path of a file.
+    pub fn from_file<P: Into<Arc<Path>>, S: Into<String>>(client_etag: EtagIfNoneMatch, path: P, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
+        let path = path.into();
+        let file_name = file_name.map(|file_name| file_name.into());
+
+        let data = EtaggedRawResponseData::File(path);
+
+        EtaggedRawResponse {
+            client_etag,
+            file_name,
+            content_type,
+            data,
+        }
+    }
+}
+
+impl EtaggedRawResponse {
+    #[inline]
+    /// Create the fairing of `EtaggedRawResponse`.
+    pub fn fairing() -> impl Fairing {
+        EtaggedRawResponseFairing {
+            custom_callback: Box::new(move || {
+                DEFAULT_CACHE_CAPACITY
+            }),
+        }
+    }
+
+    #[inline]
+    /// Create the fairing of `EtaggedRawResponse`.
+    pub fn fairing_cache<F>(f: F) -> impl Fairing where F: Fn() -> usize + Send + Sync + 'static {
+        EtaggedRawResponseFairing {
+            custom_callback: Box::new(f),
+        }
+    }
+}
+
+macro_rules! file_name {
+    ($s:expr, $res:expr) => {
+        if let Some(file_name) = $s.file_name {
+            if !file_name.is_empty() {
+                $res.raw_header("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encoding::percent_encode(file_name.as_bytes(), percent_encoding::QUERY_ENCODE_SET)));
+            }
+        }
+    };
+}
+
+macro_rules! content_type {
+    ($s:expr, $res:expr) => {
+        if let Some(content_type) = $s.content_type {
+            $res.raw_header("Content-Type", content_type.to_string());
+        }
+    };
+}
+
+impl<'a> Responder<'a> for EtaggedRawResponse {
+    fn respond_to(self, request: &Request) -> response::Result<'a> {
+        let mut response = Response::build();
+
+        match self.data {
+            EtaggedRawResponseData::Vec { data, key } => {
+                let etag_cache = request.guard::<State<KeyEtagCache>>().expect("KeyEtagCache registered in on_attach");
+
+                let etag = etag_cache.get_or_insert(key.clone(), data.as_slice());
+
+                let is_etag_match = self.client_etag.weak_eq(&etag);
+
+                if is_etag_match {
+                    response.status(Status::NotModified);
+                } else {
+                    file_name!(self, response);
+                    content_type!(self, response);
+
+                    response.raw_header("Etag", etag.to_string());
+
+                    response.sized_body(Cursor::new(data));
+                }
+            }
+            EtaggedRawResponseData::Reader { data, content_length, etag } => {
+                let is_etag_match = self.client_etag.weak_eq(&etag);
+
+                if is_etag_match {
+                    response.status(Status::NotModified);
+                } else {
+                    file_name!(self, response);
+                    content_type!(self, response);
+
+                    if let Some(content_length) = content_length {
+                        response.raw_header("Content-Length", content_length.to_string());
+                    }
+
+                    response.raw_header("Etag", etag.to_string());
+
+                    response.streamed_body(data);
+                }
+            }
+            EtaggedRawResponseData::File(path) => {
+                let etag_cache = request.guard::<State<FileEtagCache>>().expect("FileEtagCache registered in on_attach");
+
+                let etag = etag_cache.get_or_insert(path.clone()).map_err(|_| Status::InternalServerError)?;
+
+                let is_etag_match = self.client_etag.weak_eq(&etag);
+
+                if is_etag_match {
+                    response.status(Status::NotModified);
+                } else {
+                    if let Some(file_name) = self.file_name {
+                        if !file_name.is_empty() {
+                            response.raw_header("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encoding::percent_encode(file_name.as_bytes(), percent_encoding::QUERY_ENCODE_SET)));
+                        }
+                    } else {
+                        if let Some(file_name) = path.file_name().map(|file_name| file_name.to_string_lossy()) {
+                            response.raw_header("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encoding::percent_encode(file_name.as_bytes(), percent_encoding::QUERY_ENCODE_SET)));
+                        }
+                    }
+                    content_type!(self, response);
+
+                    let metadata = path.metadata().map_err(|_| Status::InternalServerError)?;
+
+                    response.raw_header("Content-Length", metadata.len().to_string());
+
+                    response.raw_header("Etag", etag.to_string());
+
+                    response.streamed_body(File::open(path).map_err(|_| Status::InternalServerError)?);
+                }
+            }
+        }
+
+        response.ok()
     }
 }
