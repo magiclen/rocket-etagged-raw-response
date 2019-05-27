@@ -21,7 +21,7 @@ extern crate lru_time_cache;
 extern crate rocket;
 extern crate rocket_etag_if_none_match;
 
-use std::io::{Read, Cursor};
+use std::io::{Read, Cursor, ErrorKind};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -230,13 +230,15 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                         }
                     }
 
-                    let metadata = path.metadata().map_err(|_| Status::InternalServerError)?;
-
-                    response.raw_header("Content-Length", metadata.len().to_string());
+                    let file = File::open(path).map_err(|err| if err.kind() == ErrorKind::NotFound {
+                        Status::NotFound
+                    } else {
+                        Status::InternalServerError
+                    })?;
 
                     response.raw_header("Etag", etag.to_string());
 
-                    response.streamed_body(File::open(path).map_err(|_| Status::InternalServerError)?);
+                    response.sized_body(file);
                 }
             }
         }
