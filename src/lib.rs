@@ -217,7 +217,18 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                             response.raw_header("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encoding::percent_encode(file_name.as_bytes(), percent_encoding::QUERY_ENCODE_SET)));
                         }
                     }
-                    content_type!(self, response);
+
+                    if let Some(content_type) = self.content_type {
+                        response.raw_header("Content-Type", content_type.to_string());
+                    } else {
+                        if let Some(extension) = path.extension() {
+                            if let Some(extension) = extension.to_str() {
+                                let content_type = mime_guess::get_mime_type(extension);
+
+                                response.raw_header("Content-Type", content_type.to_string());
+                            }
+                        }
+                    }
 
                     let metadata = path.metadata().map_err(|_| Status::InternalServerError)?;
 
