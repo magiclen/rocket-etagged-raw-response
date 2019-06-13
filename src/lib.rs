@@ -157,7 +157,7 @@ macro_rules! content_type {
 
 impl<'a> Responder<'a> for EtaggedRawResponse {
     fn respond_to(self, request: &Request) -> response::Result<'a> {
-        let client_etag = request.guard::<EtagIfNoneMatch>().expect("KeyEtagCache registered in on_attach");
+        let client_etag = request.guard::<EtagIfNoneMatch>().unwrap();
 
         let mut response = Response::build();
 
