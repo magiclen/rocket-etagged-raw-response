@@ -33,7 +33,9 @@ use rocket::request::Request;
 use rocket::http::Status;
 use rocket::fairing::Fairing;
 
-pub use rocket_etag_if_none_match::{EntityTag, EtagIfNoneMatch};
+use rocket_etag_if_none_match::EtagIfNoneMatch;
+
+pub use rocket_etag_if_none_match::EntityTag;
 
 pub use key_etag_cache::KeyEtagCache;
 pub use file_etag_cache::FileEtagCache;
@@ -51,7 +53,7 @@ enum EtaggedRawResponseData {
     },
     Reader {
         #[derivative(Debug = "ignore")]
-        data: Box<Read + 'static>,
+        data: Box<dyn Read + 'static>,
         content_length: Option<u64>,
         etag: EntityTag,
     },
@@ -60,7 +62,6 @@ enum EtaggedRawResponseData {
 
 #[derive(Debug)]
 pub struct EtaggedRawResponse {
-    client_etag: EtagIfNoneMatch,
     file_name: Option<String>,
     content_type: Option<Mime>,
     data: EtaggedRawResponseData,
@@ -68,7 +69,7 @@ pub struct EtaggedRawResponse {
 
 impl EtaggedRawResponse {
     /// Create a `EtaggedRawResponse` instance from a `Vec<u8>`.
-    pub fn from_vec<K: Into<Arc<str>>, S: Into<String>>(client_etag: EtagIfNoneMatch, key: K, vec: Vec<u8>, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
+    pub fn from_vec<K: Into<Arc<str>>, S: Into<String>>(key: K, vec: Vec<u8>, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
         let key = key.into();
         let file_name = file_name.map(|file_name| file_name.into());
 
@@ -78,7 +79,6 @@ impl EtaggedRawResponse {
         };
 
         EtaggedRawResponse {
-            client_etag,
             file_name,
             content_type,
             data,
@@ -86,7 +86,7 @@ impl EtaggedRawResponse {
     }
 
     /// Create a `EtaggedRawResponse` instance from a reader.
-    pub fn from_reader<R: Read + 'static, S: Into<String>>(client_etag: EtagIfNoneMatch, etag: EntityTag, reader: R, file_name: Option<S>, content_type: Option<Mime>, content_length: Option<u64>) -> EtaggedRawResponse {
+    pub fn from_reader<R: Read + 'static, S: Into<String>>(etag: EntityTag, reader: R, file_name: Option<S>, content_type: Option<Mime>, content_length: Option<u64>) -> EtaggedRawResponse {
         let file_name = file_name.map(|file_name| file_name.into());
 
         let data = EtaggedRawResponseData::Reader {
@@ -96,7 +96,6 @@ impl EtaggedRawResponse {
         };
 
         EtaggedRawResponse {
-            client_etag,
             file_name,
             content_type,
             data,
@@ -104,14 +103,13 @@ impl EtaggedRawResponse {
     }
 
     /// Create a `EtaggedRawResponse` instance from a path of a file.
-    pub fn from_file<P: Into<Arc<Path>>, S: Into<String>>(client_etag: EtagIfNoneMatch, path: P, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
+    pub fn from_file<P: Into<Arc<Path>>, S: Into<String>>(path: P, file_name: Option<S>, content_type: Option<Mime>) -> EtaggedRawResponse {
         let path = path.into();
         let file_name = file_name.map(|file_name| file_name.into());
 
         let data = EtaggedRawResponseData::File(path);
 
         EtaggedRawResponse {
-            client_etag,
             file_name,
             content_type,
             data,
@@ -159,6 +157,8 @@ macro_rules! content_type {
 
 impl<'a> Responder<'a> for EtaggedRawResponse {
     fn respond_to(self, request: &Request) -> response::Result<'a> {
+        let client_etag = request.guard::<EtagIfNoneMatch>().expect("KeyEtagCache registered in on_attach");
+
         let mut response = Response::build();
 
         match self.data {
@@ -167,7 +167,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
 
                 let etag = etag_cache.get_or_insert(key.clone(), data.as_slice());
 
-                let is_etag_match = self.client_etag.weak_eq(&etag);
+                let is_etag_match = client_etag.weak_eq(&etag);
 
                 if is_etag_match {
                     response.status(Status::NotModified);
@@ -181,7 +181,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                 }
             }
             EtaggedRawResponseData::Reader { data, content_length, etag } => {
-                let is_etag_match = self.client_etag.weak_eq(&etag);
+                let is_etag_match = client_etag.weak_eq(&etag);
 
                 if is_etag_match {
                     response.status(Status::NotModified);
@@ -203,7 +203,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
 
                 let etag = etag_cache.get_or_insert(path.clone()).map_err(|_| Status::InternalServerError)?;
 
-                let is_etag_match = self.client_etag.weak_eq(&etag);
+                let is_etag_match = client_etag.weak_eq(&etag);
 
                 if is_etag_match {
                     response.status(Status::NotModified);

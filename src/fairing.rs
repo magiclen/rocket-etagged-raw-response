@@ -7,7 +7,7 @@ const FAIRING_NAME: &'static str = "Etagged Raw";
 
 /// The fairing of `EtaggedRawResponse`.
 pub struct EtaggedRawResponseFairing {
-    pub(crate) custom_callback: Box<Fn() -> usize + Send + Sync + 'static>,
+    pub(crate) custom_callback: Box<dyn Fn() -> usize + Send + Sync + 'static>,
 }
 
 impl Fairing for EtaggedRawResponseFairing {
