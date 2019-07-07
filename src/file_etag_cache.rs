@@ -5,12 +5,12 @@ use std::fs::File;
 use std::time::SystemTime;
 
 use crate::EntityTag;
-use crate::crc_any::CRC;
+use crate::crc_any::CRCu64;
 use crate::lru_time_cache::LruCache;
 
 #[inline]
 fn compute_file_etag<P: AsRef<Path>>(path: P) -> Result<EntityTag, io::Error> {
-    let mut crc64ecma = CRC::crc64ecma();
+    let mut crc64ecma = CRCu64::crc64();
 
     let mut buffer = [0u8; 4096];
 

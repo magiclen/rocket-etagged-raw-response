@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use crate::EntityTag;
-use crate::crc_any::CRC;
+use crate::crc_any::CRCu64;
 use crate::lru_time_cache::LruCache;
 
 #[inline]
 fn compute_data_etag<B: AsRef<[u8]> + ?Sized>(data: &B) -> EntityTag {
-    let mut crc64ecma = CRC::crc64ecma();
+    let mut crc64ecma = CRCu64::crc64();
     crc64ecma.digest(data.as_ref());
     let crc64 = crc64ecma.get_crc();
     EntityTag::new(true, format!("{:X}", crc64))
