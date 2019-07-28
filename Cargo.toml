@@ -10,8 +10,9 @@ description= "This crate provides a response struct used for responding raw data
 readme = "README.md"
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "magiclen/rocket-etagged-raw-response", branch = "master" }
+[badges.travis-ci]
+repository = "magiclen/rocket-etagged-raw-response"
+branch = "master"
 
 [dependencies]
 derivative = "1"
