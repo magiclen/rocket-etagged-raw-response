@@ -11,7 +11,7 @@ mod file_etag_cache;
 mod fairing;
 
 #[macro_use]
-extern crate derivative;
+extern crate educe;
 pub extern crate mime;
 extern crate mime_guess;
 extern crate percent_encoding;
@@ -44,15 +44,15 @@ use std::fs::File;
 
 const DEFAULT_CACHE_CAPACITY: usize = 64;
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 enum EtaggedRawResponseData {
     Vec {
         data: Vec<u8>,
         key: Arc<str>,
     },
     Reader {
-        #[derivative(Debug = "ignore")]
+        #[educe(Debug(ignore))]
         data: Box<dyn Read + 'static>,
         content_length: Option<u64>,
         etag: EntityTag,

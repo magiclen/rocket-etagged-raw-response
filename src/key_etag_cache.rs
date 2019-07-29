@@ -12,10 +12,10 @@ fn compute_data_etag<B: AsRef<[u8]> + ?Sized>(data: &B) -> EntityTag {
     EntityTag::new(true, format!("{:X}", crc64))
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub struct KeyEtagCache {
-    #[derivative(Debug = "ignore")]
+    #[educe(Debug(ignore))]
     cache_table: Mutex<LruCache<Arc<str>, Arc<EntityTag>>>,
 }
 

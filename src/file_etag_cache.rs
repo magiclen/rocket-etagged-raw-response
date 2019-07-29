@@ -37,10 +37,10 @@ fn compute_file_etag<P: AsRef<Path>>(path: P) -> Result<EntityTag, io::Error> {
     Ok(EntityTag::new(true, format!("{:X}", crc64)))
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub struct FileEtagCache {
-    #[derivative(Debug = "ignore")]
+    #[educe(Debug(ignore))]
     cache_table: Mutex<LruCache<Arc<Path>, (Arc<EntityTag>, Option<SystemTime>)>>,
 }
 
