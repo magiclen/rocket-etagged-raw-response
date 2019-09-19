@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use crate::EntityTag;
 use crate::crc_any::CRCu64;
 use crate::lru_time_cache::LruCache;
+use crate::EntityTag;
 
 #[inline]
 fn compute_data_etag<B: AsRef<[u8]> + ?Sized>(data: &B) -> EntityTag {
@@ -42,10 +42,14 @@ impl KeyEtagCache {
 
     #[inline]
     /// Get an Etag with a key.
-    pub fn get_or_insert<S: Into<Arc<str>>, B: AsRef<[u8]> + ?Sized>(&self, key: S, data: &B) -> Arc<EntityTag> {
+    pub fn get_or_insert<S: Into<Arc<str>>, B: AsRef<[u8]> + ?Sized>(
+        &self,
+        key: S,
+        data: &B,
+    ) -> Arc<EntityTag> {
         let key = key.into();
 
-        match self.cache_table.lock().unwrap().get(key.as_ref()).map(|etag| etag.clone()) {
+        match self.cache_table.lock().unwrap().get(key.as_ref()).cloned() {
             Some(etag) => etag,
             None => {
                 let etag = Arc::new(compute_data_etag(data));

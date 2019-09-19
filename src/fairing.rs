@@ -1,9 +1,9 @@
-use crate::rocket::Rocket;
 use crate::rocket::fairing::{Fairing, Info, Kind};
+use crate::rocket::Rocket;
 
-use crate::{KeyEtagCache, FileEtagCache};
+use crate::{FileEtagCache, KeyEtagCache};
 
-const FAIRING_NAME: &'static str = "Etagged Raw";
+const FAIRING_NAME: &str = "Etagged Raw";
 
 /// The fairing of `EtaggedRawResponse`.
 pub struct EtaggedRawResponseFairing {

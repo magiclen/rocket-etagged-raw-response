@@ -1,12 +1,12 @@
-use std::sync::{Arc, Mutex};
-use std::path::Path;
-use std::io::{self, Read};
 use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::EntityTag;
 use crate::crc_any::CRCu64;
 use crate::lru_time_cache::LruCache;
+use crate::EntityTag;
 
 #[inline]
 fn compute_file_etag<P: AsRef<Path>>(path: P) -> Result<EntityTag, io::Error> {
@@ -39,6 +39,7 @@ fn compute_file_etag<P: AsRef<Path>>(path: P) -> Result<EntityTag, io::Error> {
 
 #[derive(Educe)]
 #[educe(Debug)]
+#[allow(clippy::type_complexity)]
 pub struct FileEtagCache {
     #[educe(Debug(ignore))]
     cache_table: Mutex<LruCache<Arc<Path>, (Arc<EntityTag>, Option<SystemTime>)>>,
@@ -67,10 +68,19 @@ impl FileEtagCache {
 
     #[inline]
     /// Get an Etag with a name as its key.
-    pub fn get_or_insert<P: Into<Arc<Path>> + ?Sized>(&self, path: P) -> io::Result<Arc<EntityTag>> {
+    pub fn get_or_insert<P: Into<Arc<Path>> + ?Sized>(
+        &self,
+        path: P,
+    ) -> io::Result<Arc<EntityTag>> {
         let path = path.into();
 
-        let mtime = match self.cache_table.lock().unwrap().get(path.as_ref()).map(|(etag, mtime)| (etag.clone(), mtime.clone())) {
+        let mtime = match self
+            .cache_table
+            .lock()
+            .unwrap()
+            .get(path.as_ref())
+            .map(|(etag, mtime)| (etag.clone(), *mtime))
+        {
             Some((etag, mtime)) => {
                 let metadata = path.metadata()?;
 
@@ -84,19 +94,13 @@ impl FileEtagCache {
                                     return Ok(etag);
                                 }
                             }
-                            Err(_) => {
-                                None
-                            }
+                            Err(_) => None,
                         }
                     }
                     None => {
                         match metadata.modified() {
-                            Ok(new_mtime) => {
-                                Some(new_mtime)
-                            }
-                            Err(_) => {
-                                None
-                            }
+                            Ok(new_mtime) => Some(new_mtime),
+                            Err(_) => None,
                         }
                     }
                 }
@@ -105,12 +109,8 @@ impl FileEtagCache {
                 let metadata = path.metadata()?;
 
                 match metadata.modified() {
-                    Ok(new_mtime) => {
-                        Some(new_mtime)
-                    }
-                    Err(_) => {
-                        None
-                    }
+                    Ok(new_mtime) => Some(new_mtime),
+                    Err(_) => None,
                 }
             }
         };
