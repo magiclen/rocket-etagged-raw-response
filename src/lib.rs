@@ -24,8 +24,10 @@ extern crate rocket_etag_if_none_match;
 use std::io::{Cursor, ErrorKind, Read};
 use std::path::Path;
 use std::sync::Arc;
+use std::fs::File;
 
 use mime::Mime;
+use percent_encoding::{AsciiSet, CONTROLS};
 
 use rocket::fairing::Fairing;
 use rocket::http::Status;
@@ -40,9 +42,14 @@ pub use rocket_etag_if_none_match::EntityTag;
 use fairing::EtaggedRawResponseFairing;
 pub use file_etag_cache::FileEtagCache;
 pub use key_etag_cache::KeyEtagCache;
-use std::fs::File;
 
 const DEFAULT_CACHE_CAPACITY: usize = 64;
+
+const FRAGMENT_PERCENT_ENCODE_SET: &AsciiSet =
+    &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
+
+const PATH_PERCENT_ENCODE_SET: &AsciiSet =
+    &FRAGMENT_PERCENT_ENCODE_SET.add(b'#').add(b'?').add(b'{').add(b'}');
 
 #[derive(Educe)]
 #[educe(Debug)]
@@ -162,7 +169,7 @@ macro_rules! file_name {
                         "inline; filename*=UTF-8''{}",
                         percent_encoding::percent_encode(
                             file_name.as_bytes(),
-                            percent_encoding::QUERY_ENCODE_SET
+                            PATH_PERCENT_ENCODE_SET
                         )
                     ),
                 );
@@ -253,7 +260,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                                     "inline; filename*=UTF-8''{}",
                                     percent_encoding::percent_encode(
                                         file_name.as_bytes(),
-                                        percent_encoding::QUERY_ENCODE_SET
+                                        PATH_PERCENT_ENCODE_SET
                                     )
                                 ),
                             );
@@ -267,7 +274,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                                 "inline; filename*=UTF-8''{}",
                                 percent_encoding::percent_encode(
                                     file_name.as_bytes(),
-                                    percent_encoding::QUERY_ENCODE_SET
+                                    PATH_PERCENT_ENCODE_SET
                                 )
                             ),
                         );
