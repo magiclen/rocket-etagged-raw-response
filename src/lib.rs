@@ -21,10 +21,10 @@ extern crate percent_encoding;
 extern crate rocket;
 extern crate rocket_etag_if_none_match;
 
+use std::fs::File;
 use std::io::{Cursor, ErrorKind, Read};
 use std::path::Path;
 use std::sync::Arc;
-use std::fs::File;
 
 use mime::Mime;
 use percent_encoding::{AsciiSet, CONTROLS};
