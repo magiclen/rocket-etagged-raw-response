@@ -23,8 +23,7 @@ extern crate rocket_etag_if_none_match;
 
 use std::fs::File;
 use std::io::{Cursor, ErrorKind, Read};
-use std::path::Path;
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use mime::Mime;
 use percent_encoding::{AsciiSet, CONTROLS};
@@ -56,7 +55,7 @@ const PATH_PERCENT_ENCODE_SET: &AsciiSet =
 enum EtaggedRawResponseData {
     Vec {
         data: Vec<u8>,
-        key: Arc<str>,
+        key: String,
     },
     Reader {
         #[educe(Debug(ignore))]
@@ -64,7 +63,7 @@ enum EtaggedRawResponseData {
         content_length: Option<u64>,
         etag: EntityTag,
     },
-    File(Arc<Path>),
+    File(PathBuf),
 }
 
 #[derive(Debug)]
@@ -76,7 +75,7 @@ pub struct EtaggedRawResponse {
 
 impl EtaggedRawResponse {
     /// Create a `EtaggedRawResponse` instance from a `Vec<u8>`.
-    pub fn from_vec<K: Into<Arc<str>>, S: Into<String>>(
+    pub fn from_vec<K: Into<String>, S: Into<String>>(
         key: K,
         vec: Vec<u8>,
         file_name: Option<S>,
@@ -121,7 +120,7 @@ impl EtaggedRawResponse {
     }
 
     /// Create a `EtaggedRawResponse` instance from a path of a file.
-    pub fn from_file<P: Into<Arc<Path>>, S: Into<String>>(
+    pub fn from_file<P: Into<PathBuf>, S: Into<String>>(
         path: P,
         file_name: Option<S>,
         content_type: Option<Mime>,
@@ -201,7 +200,7 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                     .guard::<State<KeyEtagCache>>()
                     .expect("KeyEtagCache registered in on_attach");
 
-                let etag = etag_cache.get_or_insert(key.clone(), data.as_slice());
+                let etag = etag_cache.get_or_insert(key, data.as_slice());
 
                 let is_etag_match = client_etag.weak_eq(&etag);
 

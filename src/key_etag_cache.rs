@@ -16,7 +16,7 @@ fn compute_data_etag<B: AsRef<[u8]> + ?Sized>(data: &B) -> EntityTag {
 #[educe(Debug)]
 pub struct KeyEtagCache {
     #[educe(Debug(ignore))]
-    cache_table: Mutex<LruCache<Arc<str>, Arc<EntityTag>>>,
+    cache_table: Mutex<LruCache<String, Arc<EntityTag>>>,
 }
 
 impl KeyEtagCache {
@@ -42,19 +42,17 @@ impl KeyEtagCache {
 
     #[inline]
     /// Get an Etag with a key.
-    pub fn get_or_insert<S: Into<Arc<str>>, B: AsRef<[u8]> + ?Sized>(
+    pub fn get_or_insert<S: AsRef<str> + Into<String>, B: AsRef<[u8]> + ?Sized>(
         &self,
         key: S,
         data: &B,
     ) -> Arc<EntityTag> {
-        let key = key.into();
-
         match self.cache_table.lock().unwrap().get(key.as_ref()).cloned() {
             Some(etag) => etag,
             None => {
                 let etag = Arc::new(compute_data_etag(data));
 
-                self.cache_table.lock().unwrap().insert(key, etag.clone());
+                self.cache_table.lock().unwrap().insert(key.into(), etag.clone());
 
                 etag
             }

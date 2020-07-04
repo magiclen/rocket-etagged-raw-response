@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -42,7 +42,7 @@ fn compute_file_etag<P: AsRef<Path>>(path: P) -> Result<EntityTag, io::Error> {
 #[allow(clippy::type_complexity)]
 pub struct FileEtagCache {
     #[educe(Debug(ignore))]
-    cache_table: Mutex<LruCache<Arc<Path>, (Arc<EntityTag>, Option<SystemTime>)>>,
+    cache_table: Mutex<LruCache<PathBuf, (Arc<EntityTag>, Option<SystemTime>)>>,
 }
 
 impl FileEtagCache {
@@ -68,21 +68,21 @@ impl FileEtagCache {
 
     #[inline]
     /// Get an Etag with a name as its key.
-    pub fn get_or_insert<P: Into<Arc<Path>> + ?Sized>(
+    pub fn get_or_insert<P: AsRef<Path> + Into<PathBuf>>(
         &self,
         path: P,
     ) -> io::Result<Arc<EntityTag>> {
-        let path = path.into();
+        let path_ref = path.as_ref();
 
         let mtime = match self
             .cache_table
             .lock()
             .unwrap()
-            .get(path.as_ref())
+            .get(path_ref)
             .map(|(etag, mtime)| (etag.clone(), *mtime))
         {
             Some((etag, mtime)) => {
-                let metadata = path.metadata()?;
+                let metadata = path_ref.metadata()?;
 
                 match mtime {
                     Some(mtime) => {
@@ -106,7 +106,7 @@ impl FileEtagCache {
                 }
             }
             None => {
-                let metadata = path.metadata()?;
+                let metadata = path_ref.metadata()?;
 
                 match metadata.modified() {
                     Ok(new_mtime) => Some(new_mtime),
@@ -119,7 +119,7 @@ impl FileEtagCache {
 
         let etag = Arc::new(etag);
 
-        self.cache_table.lock().unwrap().insert(path, (etag.clone(), mtime));
+        self.cache_table.lock().unwrap().insert(path.into(), (etag.clone(), mtime));
 
         Ok(etag)
     }
