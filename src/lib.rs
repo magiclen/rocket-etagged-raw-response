@@ -53,6 +53,10 @@ const PATH_PERCENT_ENCODE_SET: &AsciiSet =
 #[derive(Educe)]
 #[educe(Debug)]
 enum EtaggedRawResponseData {
+    Static {
+        data: &'static [u8],
+        key: String,
+    },
     Vec {
         data: Vec<u8>,
         key: String,
@@ -74,6 +78,28 @@ pub struct EtaggedRawResponse {
 }
 
 impl EtaggedRawResponse {
+    /// Create a `EtaggedRawResponse` instance from a `&'static [u8]`.
+    pub fn from_static<K: Into<String>, S: Into<String>>(
+        key: K,
+        data: &'static [u8],
+        file_name: Option<S>,
+        content_type: Option<Mime>,
+    ) -> EtaggedRawResponse {
+        let key = key.into();
+        let file_name = file_name.map(|file_name| file_name.into());
+
+        let data = EtaggedRawResponseData::Static {
+            data,
+            key,
+        };
+
+        EtaggedRawResponse {
+            file_name,
+            content_type,
+            data,
+        }
+    }
+
     /// Create a `EtaggedRawResponse` instance from a `Vec<u8>`.
     pub fn from_vec<K: Into<String>, S: Into<String>>(
         key: K,
@@ -192,6 +218,29 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
         let mut response = Response::build();
 
         match self.data {
+            EtaggedRawResponseData::Static {
+                data,
+                key,
+            } => {
+                let etag_cache = request
+                    .guard::<State<KeyEtagCache>>()
+                    .expect("KeyEtagCache registered in on_attach");
+
+                let etag = etag_cache.get_or_insert(key, data);
+
+                let is_etag_match = client_etag.weak_eq(&etag);
+
+                if is_etag_match {
+                    response.status(Status::NotModified);
+                } else {
+                    file_name!(self, response);
+                    content_type!(self, response);
+
+                    response.raw_header("Etag", etag.to_string());
+
+                    response.sized_body(Cursor::new(data));
+                }
+            }
             EtaggedRawResponseData::Vec {
                 data,
                 key,
