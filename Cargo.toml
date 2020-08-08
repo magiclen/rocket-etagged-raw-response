@@ -1,6 +1,6 @@
 [package]
 name = "rocket-etagged-raw-response"
-version = "0.9.10"
+version = "0.9.11"
 authors = ["Magic Len <len@magiclen.org>"]
 edition = "2018"
 repository = "https://github.com/magiclen/rocket-etagged-raw-response"
