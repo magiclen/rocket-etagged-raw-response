@@ -291,13 +291,13 @@ impl<'a> Responder<'a> for EtaggedRawResponse {
                     .guard::<State<FileEtagCache>>()
                     .expect("FileEtagCache registered in on_attach");
 
-                let etag = match etag_cache.get_or_insert(path.clone()) {
-                    Ok(etag) => etag,
-                    Err(ref err) if err.kind() == ErrorKind::NotFound => {
-                        return Err(Status::NotFound)
+                let etag = etag_cache.get_or_insert(path.clone()).map_err(|err| {
+                    if err.kind() == ErrorKind::NotFound {
+                        Status::NotFound
+                    } else {
+                        Status::InternalServerError
                     }
-                    Err(_) => return Err(Status::InternalServerError),
-                };
+                })?;
 
                 let is_etag_match = client_etag.weak_eq(&etag);
 
