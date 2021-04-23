@@ -1,21 +1,31 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 #[macro_use]
 extern crate rocket;
 
 extern crate rocket_etagged_raw_response;
 
+use std::io::ErrorKind;
 use std::path::Path;
 
-use rocket_etagged_raw_response::EtaggedRawResponse;
+use rocket::http::Status;
+
+use rocket_etagged_raw_response::{EtagIfNoneMatch, EtaggedRawResponse};
 
 #[get("/")]
-fn view() -> EtaggedRawResponse {
+async fn view(etag_if_none_match: EtagIfNoneMatch<'_>) -> Result<EtaggedRawResponse<'_>, Status> {
     let path = Path::join(Path::new("examples"), Path::join(Path::new("images"), "image(貓).jpg"));
 
-    EtaggedRawResponse::from_file(path, None::<String>, None)
+    EtaggedRawResponse::from_file(&etag_if_none_match, path, None::<String>, None).await.map_err(
+        |err| {
+            if err.kind() == ErrorKind::NotFound {
+                Status::NotFound
+            } else {
+                Status::InternalServerError
+            }
+        },
+    )
 }
 
-fn main() {
-    rocket::ignite().attach(EtaggedRawResponse::fairing()).mount("/", routes![view]).launch();
+#[launch]
+fn rocket() -> _ {
+    rocket::build().mount("/", routes![view])
 }

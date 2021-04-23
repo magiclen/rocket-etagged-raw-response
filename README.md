@@ -1,7 +1,7 @@
 Etagged Raw Response for Rocket Framework
 ====================
 
-[![Build Status](https://travis-ci.org/magiclen/rocket-etagged-raw-response.svg?branch=master)](https://travis-ci.org/magiclen/rocket-raw-response)
+[![CI](https://github.com/magiclen/rocket-etagged-raw-response/actions/workflows/ci.yml/badge.svg)](https://github.com/magiclen/rocket-etagged-raw-response/actions/workflows/ci.yml)
 
 This crate provides a response struct used for responding raw data with **Etag** cache.
 

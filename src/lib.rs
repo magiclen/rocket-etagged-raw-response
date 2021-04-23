@@ -1,185 +1,178 @@
-/*!
-# Etagged Raw Response for Rocket Framework
-
-This crate provides a response struct used for responding raw data with **Etag** cache.
-
-See `examples`.
-*/
-
-mod fairing;
-mod file_etag_cache;
-mod key_etag_cache;
-
 #[macro_use]
 extern crate educe;
-extern crate crc_any;
-extern crate lru_time_cache;
-pub extern crate mime;
-extern crate mime_guess;
-extern crate percent_encoding;
 
 extern crate rocket;
+
 extern crate rocket_etag_if_none_match;
 
-use std::fs::File;
-use std::io::{Cursor, ErrorKind, Read};
-use std::path::PathBuf;
+pub extern crate mime;
+extern crate mime_guess;
+extern crate url_escape;
+
+use std::io::{self, Cursor};
+use std::marker::Unpin;
+use std::path::Path;
+use std::sync::Arc;
 
 use mime::Mime;
-use percent_encoding::{AsciiSet, CONTROLS};
 
-use rocket::fairing::Fairing;
 use rocket::http::Status;
 use rocket::request::Request;
 use rocket::response::{self, Responder, Response};
-use rocket::State;
 
-use rocket_etag_if_none_match::EtagIfNoneMatch;
+use rocket::tokio::fs::File as AsyncFile;
+use rocket::tokio::io::AsyncRead;
 
-pub use rocket_etag_if_none_match::EntityTag;
-
-use fairing::EtaggedRawResponseFairing;
-pub use file_etag_cache::FileEtagCache;
-pub use key_etag_cache::KeyEtagCache;
-
-const DEFAULT_CACHE_CAPACITY: usize = 64;
-
-const FRAGMENT_PERCENT_ENCODE_SET: &AsciiSet =
-    &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
-
-const PATH_PERCENT_ENCODE_SET: &AsciiSet =
-    &FRAGMENT_PERCENT_ENCODE_SET.add(b'#').add(b'?').add(b'{').add(b'}');
+pub use rocket_etag_if_none_match::entity_tag::EntityTag;
+pub use rocket_etag_if_none_match::EtagIfNoneMatch;
 
 #[derive(Educe)]
 #[educe(Debug)]
-enum EtaggedRawResponseData {
-    Static {
-        data: &'static [u8],
-        key: String,
-    },
-    Vec {
-        data: Vec<u8>,
-        key: String,
-    },
+enum EtaggedRawResponseData<'o> {
+    Slice(&'o [u8]),
+    Vec(Vec<u8>),
     Reader {
         #[educe(Debug(ignore))]
-        data: Box<dyn Read + 'static>,
+        data: Box<dyn AsyncRead + Send + Unpin + 'o>,
         content_length: Option<u64>,
-        etag: EntityTag,
     },
-    File(PathBuf),
+    File(Arc<Path>, AsyncFile),
 }
 
 #[derive(Debug)]
-pub struct EtaggedRawResponse {
+pub struct EtaggedRawResponse<'o> {
+    etag: EntityTag<'static>,
     file_name: Option<String>,
     content_type: Option<Mime>,
-    data: EtaggedRawResponseData,
+    data: Option<EtaggedRawResponseData<'o>>,
 }
 
-impl EtaggedRawResponse {
-    /// Create a `EtaggedRawResponse` instance from a `&'static [u8]`.
-    pub fn from_static<K: Into<String>, S: Into<String>>(
-        key: K,
-        data: &'static [u8],
+impl<'r, 'o: 'r> EtaggedRawResponse<'o> {
+    /// Create a `EtaggedRawResponse` instance from a `&'o [u8]`.
+    pub fn from_static<S: Into<String>>(
+        etag_if_none_match: &EtagIfNoneMatch,
+        data: &'o [u8],
         file_name: Option<S>,
         content_type: Option<Mime>,
-    ) -> EtaggedRawResponse {
-        let key = key.into();
-        let file_name = file_name.map(|file_name| file_name.into());
+    ) -> EtaggedRawResponse<'o> {
+        let etag = EntityTag::from_data(data);
 
-        let data = EtaggedRawResponseData::Static {
-            data,
-            key,
-        };
+        if etag_if_none_match.weak_eq(&etag) {
+            EtaggedRawResponse {
+                etag,
+                file_name: None,
+                content_type: None,
+                data: None,
+            }
+        } else {
+            let file_name = file_name.map(|file_name| file_name.into());
 
-        EtaggedRawResponse {
-            file_name,
-            content_type,
-            data,
+            let data = EtaggedRawResponseData::Slice(data);
+
+            EtaggedRawResponse {
+                etag,
+                file_name,
+                content_type,
+                data: Some(data),
+            }
         }
     }
 
     /// Create a `EtaggedRawResponse` instance from a `Vec<u8>`.
-    pub fn from_vec<K: Into<String>, S: Into<String>>(
-        key: K,
+    pub fn from_vec<S: Into<String>>(
+        etag_if_none_match: &EtagIfNoneMatch,
         vec: Vec<u8>,
         file_name: Option<S>,
         content_type: Option<Mime>,
-    ) -> EtaggedRawResponse {
-        let key = key.into();
-        let file_name = file_name.map(|file_name| file_name.into());
+    ) -> EtaggedRawResponse<'o> {
+        let etag = EntityTag::from_data(vec.as_slice());
 
-        let data = EtaggedRawResponseData::Vec {
-            data: vec,
-            key,
-        };
+        if etag_if_none_match.weak_eq(&etag) {
+            EtaggedRawResponse {
+                etag,
+                file_name: None,
+                content_type: None,
+                data: None,
+            }
+        } else {
+            let file_name = file_name.map(|file_name| file_name.into());
 
-        EtaggedRawResponse {
-            file_name,
-            content_type,
-            data,
+            let data = EtaggedRawResponseData::Vec(vec);
+
+            EtaggedRawResponse {
+                etag,
+                file_name,
+                content_type,
+                data: Some(data),
+            }
         }
     }
 
     /// Create a `EtaggedRawResponse` instance from a reader.
-    pub fn from_reader<R: Read + 'static, S: Into<String>>(
-        etag: EntityTag,
+    pub fn from_reader<R: AsyncRead + Send + Unpin + 'o, S: Into<String>>(
+        etag_if_none_match: &EtagIfNoneMatch,
+        etag: EntityTag<'static>,
         reader: R,
         file_name: Option<S>,
         content_type: Option<Mime>,
         content_length: Option<u64>,
-    ) -> EtaggedRawResponse {
-        let file_name = file_name.map(|file_name| file_name.into());
+    ) -> EtaggedRawResponse<'o> {
+        if etag_if_none_match.weak_eq(&etag) {
+            EtaggedRawResponse {
+                etag,
+                file_name: None,
+                content_type: None,
+                data: None,
+            }
+        } else {
+            let file_name = file_name.map(|file_name| file_name.into());
 
-        let data = EtaggedRawResponseData::Reader {
-            data: Box::new(reader),
-            content_length,
-            etag,
-        };
+            let data = EtaggedRawResponseData::Reader {
+                data: Box::new(reader),
+                content_length,
+            };
 
-        EtaggedRawResponse {
-            file_name,
-            content_type,
-            data,
+            EtaggedRawResponse {
+                etag,
+                file_name,
+                content_type,
+                data: Some(data),
+            }
         }
     }
 
     /// Create a `EtaggedRawResponse` instance from a path of a file.
-    pub fn from_file<P: Into<PathBuf>, S: Into<String>>(
+    pub async fn from_file<P: Into<Arc<Path>>, S: Into<String>>(
+        etag_if_none_match: &EtagIfNoneMatch<'r>,
         path: P,
         file_name: Option<S>,
         content_type: Option<Mime>,
-    ) -> EtaggedRawResponse {
+    ) -> Result<EtaggedRawResponse<'o>, io::Error> {
         let path = path.into();
-        let file_name = file_name.map(|file_name| file_name.into());
 
-        let data = EtaggedRawResponseData::File(path);
+        let file = AsyncFile::open(path.as_ref()).await?;
+        let metadata = file.metadata().await?;
 
-        EtaggedRawResponse {
-            file_name,
-            content_type,
-            data,
-        }
-    }
-}
+        let etag = EntityTag::from_file_meta(&metadata);
 
-impl EtaggedRawResponse {
-    #[inline]
-    /// Create the fairing of `EtaggedRawResponse`.
-    pub fn fairing() -> impl Fairing {
-        EtaggedRawResponseFairing {
-            custom_callback: Box::new(move || DEFAULT_CACHE_CAPACITY),
-        }
-    }
+        if etag_if_none_match.weak_eq(&etag) {
+            Ok(EtaggedRawResponse {
+                etag,
+                file_name: None,
+                content_type: None,
+                data: None,
+            })
+        } else {
+            let file_name = file_name.map(|file_name| file_name.into());
 
-    #[inline]
-    /// Create the fairing of `EtaggedRawResponse`.
-    pub fn fairing_cache<F>(f: F) -> impl Fairing
-    where
-        F: Fn() -> usize + Send + Sync + 'static, {
-        EtaggedRawResponseFairing {
-            custom_callback: Box::new(f),
+            let data = EtaggedRawResponseData::File(path, file);
+
+            Ok(EtaggedRawResponse {
+                etag,
+                file_name,
+                content_type,
+                data: Some(data),
+            })
         }
     }
 }
@@ -188,16 +181,11 @@ macro_rules! file_name {
     ($s:expr, $res:expr) => {
         if let Some(file_name) = $s.file_name {
             if !file_name.is_empty() {
-                $res.raw_header(
-                    "Content-Disposition",
-                    format!(
-                        "inline; filename*=UTF-8''{}",
-                        percent_encoding::percent_encode(
-                            file_name.as_bytes(),
-                            PATH_PERCENT_ENCODE_SET
-                        )
-                    ),
-                );
+                let mut v = String::from("inline; filename*=UTF-8''");
+
+                url_escape::encode_component_to_string(file_name, &mut v);
+
+                $res.raw_header("Content-Disposition", v);
             }
         }
     };
@@ -211,150 +199,76 @@ macro_rules! content_type {
     };
 }
 
-impl<'a> Responder<'a> for EtaggedRawResponse {
-    fn respond_to(self, request: &Request) -> response::Result<'a> {
-        let client_etag = request.guard::<EtagIfNoneMatch>().unwrap();
-
+impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
+    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'o> {
         let mut response = Response::build();
 
         match self.data {
-            EtaggedRawResponseData::Static {
-                data,
-                key,
-            } => {
-                let etag_cache = request
-                    .guard::<State<KeyEtagCache>>()
-                    .expect("KeyEtagCache registered in on_attach");
+            Some(data) => {
+                response.raw_header("Etag", self.etag.to_string());
 
-                let etag = etag_cache.get_or_insert(key, data);
+                match data {
+                    EtaggedRawResponseData::Slice(data) => {
+                        file_name!(self, response);
+                        content_type!(self, response);
 
-                let is_etag_match = client_etag.weak_eq(&etag);
-
-                if is_etag_match {
-                    response.status(Status::NotModified);
-                } else {
-                    file_name!(self, response);
-                    content_type!(self, response);
-
-                    response.raw_header("Etag", etag.to_string());
-
-                    response.sized_body(Cursor::new(data));
-                }
-            }
-            EtaggedRawResponseData::Vec {
-                data,
-                key,
-            } => {
-                let etag_cache = request
-                    .guard::<State<KeyEtagCache>>()
-                    .expect("KeyEtagCache registered in on_attach");
-
-                let etag = etag_cache.get_or_insert(key, data.as_slice());
-
-                let is_etag_match = client_etag.weak_eq(&etag);
-
-                if is_etag_match {
-                    response.status(Status::NotModified);
-                } else {
-                    file_name!(self, response);
-                    content_type!(self, response);
-
-                    response.raw_header("Etag", etag.to_string());
-
-                    response.sized_body(Cursor::new(data));
-                }
-            }
-            EtaggedRawResponseData::Reader {
-                data,
-                content_length,
-                etag,
-            } => {
-                let is_etag_match = client_etag.weak_eq(&etag);
-
-                if is_etag_match {
-                    response.status(Status::NotModified);
-                } else {
-                    file_name!(self, response);
-                    content_type!(self, response);
-
-                    if let Some(content_length) = content_length {
-                        response.raw_header("Content-Length", content_length.to_string());
+                        response.sized_body(data.len(), Cursor::new(data));
                     }
+                    EtaggedRawResponseData::Vec(data) => {
+                        file_name!(self, response);
+                        content_type!(self, response);
 
-                    response.raw_header("Etag", etag.to_string());
-
-                    response.streamed_body(data);
-                }
-            }
-            EtaggedRawResponseData::File(path) => {
-                let etag_cache = request
-                    .guard::<State<FileEtagCache>>()
-                    .expect("FileEtagCache registered in on_attach");
-
-                let etag = etag_cache.get_or_insert(path.clone()).map_err(|err| {
-                    if err.kind() == ErrorKind::NotFound {
-                        Status::NotFound
-                    } else {
-                        Status::InternalServerError
+                        response.sized_body(data.len(), Cursor::new(data));
                     }
-                })?;
+                    EtaggedRawResponseData::Reader {
+                        data,
+                        content_length,
+                    } => {
+                        file_name!(self, response);
+                        content_type!(self, response);
 
-                let is_etag_match = client_etag.weak_eq(&etag);
-
-                if is_etag_match {
-                    response.status(Status::NotModified);
-                } else {
-                    if let Some(file_name) = self.file_name {
-                        if !file_name.is_empty() {
-                            response.raw_header(
-                                "Content-Disposition",
-                                format!(
-                                    "inline; filename*=UTF-8''{}",
-                                    percent_encoding::percent_encode(
-                                        file_name.as_bytes(),
-                                        PATH_PERCENT_ENCODE_SET
-                                    )
-                                ),
-                            );
+                        if let Some(content_length) = content_length {
+                            response.raw_header("Content-Length", content_length.to_string());
                         }
-                    } else if let Some(file_name) =
-                        path.file_name().map(|file_name| file_name.to_string_lossy())
-                    {
-                        response.raw_header(
-                            "Content-Disposition",
-                            format!(
-                                "inline; filename*=UTF-8''{}",
-                                percent_encoding::percent_encode(
-                                    file_name.as_bytes(),
-                                    PATH_PERCENT_ENCODE_SET
-                                )
-                            ),
-                        );
+
+                        response.streamed_body(data);
                     }
+                    EtaggedRawResponseData::File(path, file) => {
+                        if let Some(file_name) = self.file_name {
+                            if !file_name.is_empty() {
+                                let mut v = String::from("inline; filename*=UTF-8''");
 
-                    if let Some(content_type) = self.content_type {
-                        response.raw_header("Content-Type", content_type.to_string());
-                    } else if let Some(extension) = path.extension() {
-                        if let Some(extension) = extension.to_str() {
-                            let content_type =
-                                mime_guess::from_ext(extension).first_or_octet_stream();
+                                url_escape::encode_component_to_string(file_name, &mut v);
 
+                                response.raw_header("Content-Disposition", v);
+                            }
+                        } else if let Some(file_name) =
+                            path.file_name().map(|file_name| file_name.to_string_lossy())
+                        {
+                            let mut v = String::from("inline; filename*=UTF-8''");
+
+                            url_escape::encode_component_to_string(file_name, &mut v);
+
+                            response.raw_header("Content-Disposition", v);
+                        }
+
+                        if let Some(content_type) = self.content_type {
                             response.raw_header("Content-Type", content_type.to_string());
+                        } else if let Some(extension) = path.extension() {
+                            if let Some(extension) = extension.to_str() {
+                                let content_type =
+                                    mime_guess::from_ext(extension).first_or_octet_stream();
+
+                                response.raw_header("Content-Type", content_type.to_string());
+                            }
                         }
+
+                        response.sized_body(None, file);
                     }
-
-                    let file = File::open(path).map_err(|err| {
-                        if err.kind() == ErrorKind::NotFound {
-                            Status::NotFound
-                        } else {
-                            Status::InternalServerError
-                        }
-                    })?;
-
-                    response.raw_header("Etag", etag.to_string());
-
-                    response.sized_body(file);
                 }
+            }
+            None => {
+                response.status(Status::NotModified);
             }
         }
 
