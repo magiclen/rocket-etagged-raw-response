@@ -1,13 +1,7 @@
 #[macro_use]
 extern crate educe;
 
-extern crate rocket;
-
-extern crate rocket_etag_if_none_match;
-
 pub extern crate mime;
-extern crate mime_guess;
-extern crate url_escape;
 
 mod temp_file_async_reader;
 

@@ -3,10 +3,10 @@ use std::io::{self};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::rocket::fs::TempFile;
+use rocket::fs::TempFile;
 
-use crate::rocket::tokio::fs::File as AsyncFile;
-use crate::rocket::tokio::io::{AsyncRead, ReadBuf};
+use rocket::tokio::fs::File as AsyncFile;
+use rocket::tokio::io::{AsyncRead, ReadBuf};
 
 enum TempFileAsyncReaderInner<'v> {
     File {
