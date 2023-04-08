@@ -5,24 +5,22 @@ pub extern crate mime;
 
 mod temp_file_async_reader;
 
-use std::io::{self, Cursor};
-use std::marker::Unpin;
-use std::path::Path;
-use std::sync::Arc;
+use std::{
+    io::{self, Cursor},
+    marker::Unpin,
+    path::Path,
+    sync::Arc,
+};
 
 use mime::Mime;
-
-use rocket::fs::TempFile;
-use rocket::http::Status;
-use rocket::request::Request;
-use rocket::response::{self, Responder, Response};
-
-use rocket::tokio::fs::File as AsyncFile;
-use rocket::tokio::io::AsyncRead;
-
-pub use rocket_etag_if_none_match::entity_tag::EntityTag;
-pub use rocket_etag_if_none_match::EtagIfNoneMatch;
-
+use rocket::{
+    fs::TempFile,
+    http::Status,
+    request::Request,
+    response::{self, Responder, Response},
+    tokio::{fs::File as AsyncFile, io::AsyncRead},
+};
+pub use rocket_etag_if_none_match::{entity_tag::EntityTag, EtagIfNoneMatch};
 use temp_file_async_reader::TempFileAsyncReader;
 
 #[derive(Educe)]
@@ -32,7 +30,7 @@ enum EtaggedRawResponseData<'o> {
     Vec(Vec<u8>),
     Reader {
         #[educe(Debug(ignore))]
-        data: Box<dyn AsyncRead + Send + Unpin + 'o>,
+        data:           Box<dyn AsyncRead + Send + Unpin + 'o>,
         content_length: Option<u64>,
     },
     File(Arc<Path>, AsyncFile),
@@ -41,10 +39,10 @@ enum EtaggedRawResponseData<'o> {
 
 #[derive(Debug)]
 pub struct EtaggedRawResponse<'o> {
-    etag: EntityTag<'static>,
-    file_name: Option<String>,
+    etag:         EntityTag<'static>,
+    file_name:    Option<String>,
     content_type: Option<Mime>,
-    data: Option<EtaggedRawResponseData<'o>>,
+    data:         Option<EtaggedRawResponseData<'o>>,
 }
 
 impl<'r, 'o: 'r> EtaggedRawResponse<'o> {
@@ -185,14 +183,13 @@ impl<'r, 'o: 'r> EtaggedRawResponse<'o> {
     ) -> Result<EtaggedRawResponse<'o>, io::Error> {
         let etag = match &temp_file {
             TempFile::File {
-                path,
-                ..
+                path, ..
             } => {
                 let file = AsyncFile::open(path.as_ref()).await?;
                 let metadata = file.metadata().await?;
 
                 EntityTag::from_file_meta(&metadata)
-            }
+            },
             TempFile::Buffered {
                 content,
             } => EntityTag::from_data(content),
@@ -256,13 +253,13 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
                         content_type!(self, response);
 
                         response.sized_body(data.len(), Cursor::new(data));
-                    }
+                    },
                     EtaggedRawResponseData::Vec(data) => {
                         file_name!(self, response);
                         content_type!(self, response);
 
                         response.sized_body(data.len(), Cursor::new(data));
-                    }
+                    },
                     EtaggedRawResponseData::Reader {
                         data,
                         content_length,
@@ -275,7 +272,7 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
                         }
 
                         response.streamed_body(data);
-                    }
+                    },
                     EtaggedRawResponseData::File(path, file) => {
                         if let Some(file_name) = self.file_name {
                             if !file_name.is_empty() {
@@ -307,7 +304,7 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
                         }
 
                         response.sized_body(None, file);
-                    }
+                    },
                     EtaggedRawResponseData::TempFile(file) => {
                         if let Some(file_name) = self.file_name {
                             if file_name.is_empty() {
@@ -354,12 +351,12 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
                             TempFileAsyncReader::from(file)
                                 .map_err(|_| Status::InternalServerError)?,
                         );
-                    }
+                    },
                 }
-            }
+            },
             None => {
                 response.status(Status::NotModified);
-            }
+            },
         }
 
         response.ok()
