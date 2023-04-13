@@ -9,7 +9,6 @@ homepage = "https://magiclen.org/rocket-etagged-raw-response"
 keywords = ["rocket", "server", "web", "response", "etag"]
 categories = ["web-programming"]
 description = "This crate provides a response struct used for responding raw data with **Etag** cache."
-readme = "README.md"
 license = "MIT"
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
