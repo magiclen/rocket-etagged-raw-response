@@ -20,7 +20,7 @@ use rocket::{
     response::{self, Responder, Response},
     tokio::{fs::File as AsyncFile, io::AsyncRead},
 };
-pub use rocket_etag_if_none_match::{entity_tag::EntityTag, EtagIfNoneMatch};
+pub use rocket_etag_if_none_match::{EtagIfNoneMatch, entity_tag::EntityTag};
 use temp_file_async_reader::TempFileAsyncReader;
 
 #[derive(Educe)]
@@ -294,13 +294,13 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
 
                         if let Some(content_type) = self.content_type {
                             response.raw_header("Content-Type", content_type.to_string());
-                        } else if let Some(extension) = path.extension() {
-                            if let Some(extension) = extension.to_str() {
-                                let content_type =
-                                    mime_guess::from_ext(extension).first_or_octet_stream();
+                        } else if let Some(extension) = path.extension()
+                            && let Some(extension) = extension.to_str()
+                        {
+                            let content_type =
+                                mime_guess::from_ext(extension).first_or_octet_stream();
 
-                                response.raw_header("Content-Type", content_type.to_string());
-                            }
+                            response.raw_header("Content-Type", content_type.to_string());
                         }
 
                         response.sized_body(None, file);
@@ -336,13 +336,12 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponse<'o> {
                             response.raw_header("Content-Type", content_type.to_string());
                         } else if let Some(extension) =
                             file.name().map(Path::new).and_then(Path::extension)
+                            && let Some(extension) = extension.to_str()
                         {
-                            if let Some(extension) = extension.to_str() {
-                                let content_type =
-                                    mime_guess::from_ext(extension).first_or_octet_stream();
+                            let content_type =
+                                mime_guess::from_ext(extension).first_or_octet_stream();
 
-                                response.raw_header("Content-Type", content_type.to_string());
-                            }
+                            response.raw_header("Content-Type", content_type.to_string());
                         }
 
                         response.raw_header("Content-Length", file.len().to_string());

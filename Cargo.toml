@@ -2,8 +2,8 @@
 name = "rocket-etagged-raw-response"
 version = "0.10.4"
 authors = ["Magic Len <len@magiclen.org>"]
-edition = "2021"
-rust-version = "1.69"
+edition = "2024"
+rust-version = "1.89"
 repository = "https://github.com/magiclen/rocket-etagged-raw-response"
 homepage = "https://magiclen.org/rocket-etagged-raw-response"
 keywords = ["rocket", "server", "web", "response", "etag"]
@@ -13,14 +13,11 @@ license = "MIT"
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
-rocket = "0.5.0-rc.4"
-mime = "0.3"
+rocket = "0.5"
+mime = "0.3.4"
 mime_guess = "2"
 url-escape = "0.1"
+educe = { version = "0.7", default-features = false, features = ["Debug"] }
 
-rocket-etag-if-none-match = "0.4.0"
-
-[dependencies.educe]
-version = ">=0.4.0"
-features = ["Debug"]
-default-features = false
+rocket-etag-if-none-match = "0.5"
+entity-tag = { version = "0.2", features = ["weak-hasher"] }
