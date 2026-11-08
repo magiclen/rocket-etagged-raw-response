@@ -79,16 +79,25 @@ fn apostrophe_page(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawRespons
         .file_name("it's.txt")
 }
 
-#[get("/file")]
-async fn file_page(etag_if_none_match: EtagIfNoneMatch<'_>) -> Result<EtaggedRawResponse, Status> {
+#[get("/file?<file_name>")]
+async fn file_page(
+    etag_if_none_match: EtagIfNoneMatch<'_>,
+    file_name: Option<&str>,
+) -> Result<EtaggedRawResponse, Status> {
     let path = Path::join(Path::new("examples"), Path::join(Path::new("images"), "image(貓).jpg"));
 
-    EtaggedRawResponse::from_file(&etag_if_none_match, path).await.map_err(|err| {
-        if err.kind() == ErrorKind::NotFound {
-            Status::NotFound
-        } else {
-            Status::InternalServerError
-        }
+    let response =
+        EtaggedRawResponse::from_file(&etag_if_none_match, path).await.map_err(|err| {
+            if err.kind() == ErrorKind::NotFound {
+                Status::NotFound
+            } else {
+                Status::InternalServerError
+            }
+        })?;
+
+    Ok(match file_name {
+        Some(file_name) => response.file_name(file_name),
+        None => response,
     })
 }
 
@@ -256,14 +265,27 @@ fn file_with_a_name_taken_from_the_path() {
     assert_eq!(Some("image/jpeg"), response.headers().get_one("Content-Type"));
 }
 
-/// Rocket strips the extension from `TempFile::name`, so the response has to put it back.
 #[test]
-fn temp_file_keeps_its_extension() {
+fn renamed_file_uses_the_source_media_type() {
+    let client = client();
+
+    let response = client.get("/file?file_name=report.unknownext").dispatch();
+
+    assert_eq!(Status::Ok, response.status());
+    assert_eq!(
+        Some("inline; filename=\"report.unknownext\"; filename*=UTF-8''report.unknownext"),
+        response.headers().get_one("Content-Disposition")
+    );
+    assert_eq!(Some("image/jpeg"), response.headers().get_one("Content-Type"));
+}
+
+#[test]
+fn temp_file_keeps_its_extensions_without_the_client_path() {
     let client = client();
 
     let body = format!(
         "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
-         filename=\"report.pdf\"\r\nContent-Type: \
+         filename=\"C:\\fakepath\\report.final.pdf\"\r\nContent-Type: \
          application/pdf\r\n\r\n%PDF-1.4\r\n--{BOUNDARY}--\r\n"
     );
 
@@ -275,7 +297,7 @@ fn temp_file_keeps_its_extension() {
 
     assert_eq!(Status::Ok, response.status());
     assert_eq!(
-        Some("inline; filename=\"report.pdf\"; filename*=UTF-8''report.pdf"),
+        Some("inline; filename=\"report.final.pdf\"; filename*=UTF-8''report.final.pdf"),
         response.headers().get_one("Content-Disposition")
     );
     assert_eq!(Some("application/pdf"), response.headers().get_one("Content-Type"));
@@ -308,7 +330,8 @@ fn temp_file_uploaded_without_a_media_type() {
     assert_eq!(Some("application/pdf"), response.headers().get_one("Content-Type"));
 }
 
-/// A value field of a form arrives as a `TempFile` that is buffered in memory instead of stored on disk, and it carries neither a name nor a media type. Such a body is sent as plain bytes, so its length is left to the server to report just like the one of a `Vec<u8>`.
+/// A value field of a form arrives as a `TempFile` that is buffered in memory instead of stored on disk, and it carries neither a name nor a media type.
+/// Such a body is sent as plain bytes, so its length is left to the server to report just like the one of a `Vec<u8>`.
 #[test]
 fn buffered_temp_file() {
     let client = client();
@@ -329,12 +352,14 @@ fn not_modified_when_the_entity_tag_matches() {
 
     let etag = String::from(client.get("/vec").dispatch().headers().get_one("ETag").unwrap());
 
-    let response = client.get("/vec").header(Header::new("If-None-Match", etag.clone())).dispatch();
+    for request in [client.get("/vec"), client.head("/vec")] {
+        let response = request.header(Header::new("If-None-Match", etag.clone())).dispatch();
 
-    assert_eq!(Status::NotModified, response.status());
-    assert_eq!(Some(etag.as_str()), response.headers().get_one("ETag"));
-    assert_eq!(None, response.headers().get_one("Content-Disposition"));
-    assert_eq!(None, response.into_string());
+        assert_eq!(Status::NotModified, response.status());
+        assert_eq!(Some(etag.as_str()), response.headers().get_one("ETag"));
+        assert_eq!(None, response.headers().get_one("Content-Disposition"));
+        assert_eq!(None, response.into_string());
+    }
 }
 
 /// `*` matches whatever representation the server currently has.
@@ -347,9 +372,8 @@ fn not_modified_when_any_entity_tag_is_requested() {
     assert_eq!(Status::NotModified, response.status());
 }
 
-/// The entity-tag of a temporary file buffered in memory comes from its content, so uploading the very same body twice hits the cache.
 #[test]
-fn buffered_temp_file_is_revalidated() {
+fn post_fails_when_the_entity_tag_matches() {
     let client = client();
 
     let response =
@@ -366,7 +390,7 @@ fn buffered_temp_file_is_revalidated() {
         .body("file=Hello%20world!")
         .dispatch();
 
-    assert_eq!(Status::NotModified, response.status());
+    assert_eq!(Status::PreconditionFailed, response.status());
     assert_eq!(Some(etag.as_str()), response.headers().get_one("ETag"));
     assert_eq!(None, response.into_string());
 }

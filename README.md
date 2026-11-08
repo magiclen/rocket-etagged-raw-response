@@ -16,7 +16,12 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-The entity-tag is computed from the data and is compared with the `if-none-match` header of the request. A `304 Not Modified` with no body is responded when they match, and the entity-tag is sent either way.
+The entity-tag is compared with the request's `If-None-Match` header.
+A match returns `304 Not Modified` for `GET` or `HEAD` and `412 Precondition Failed` for other methods.
+Both responses include the entity-tag and have an empty body.
+The entity-tag is also sent when there is no match.
+
+Routes that change data should check the precondition against the current resource before making changes.
 
 The media type is guessed from the extension of the file name, but it can also be set explicitly.
 
@@ -32,7 +37,9 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-A file on disk is opened asynchronously, its entity-tag comes from its metadata instead of its content, and both the file name and the media type default to what the path says.
+A file on disk is opened asynchronously, and its name and media type default to what the path says.
+Its weak entity-tag uses the file length and modification time.
+Changes that keep both values can reuse the same tag.
 
 ```rust
 use std::io;
@@ -68,7 +75,8 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-An uploaded file can be sent straight back. Rocket drops the extension from `TempFile::name`, so this crate puts it back from the media type of the upload.
+An uploaded file can be sent straight back.
+Rocket drops the extension from `TempFile::name`, so this crate uses the original file name to recover it and falls back to the upload's media type.
 
 ```rust
 use std::io;

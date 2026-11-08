@@ -14,7 +14,12 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-The entity-tag is computed from the data and is compared with the `if-none-match` header of the request. A `304 Not Modified` with no body is responded when they match, and the entity-tag is sent either way.
+The entity-tag is compared with the request's `If-None-Match` header.
+A match returns `304 Not Modified` for `GET` or `HEAD` and `412 Precondition Failed` for other methods.
+Both responses include the entity-tag and have an empty body.
+The entity-tag is also sent when there is no match.
+
+Routes that change data should check the precondition against the current resource before making changes.
 
 The media type is guessed from the extension of the file name, but it can also be set explicitly.
 
@@ -30,7 +35,9 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-A file on disk is opened asynchronously, its entity-tag comes from its metadata instead of its content, and both the file name and the media type default to what the path says.
+A file on disk is opened asynchronously, and its name and media type default to what the path says.
+Its weak entity-tag uses the file length and modification time.
+Changes that keep both values can reuse the same tag.
 
 ```rust
 use std::io;
@@ -66,7 +73,8 @@ fn index(etag_if_none_match: EtagIfNoneMatch<'_>) -> EtaggedRawResponse {
 }
 ```
 
-An uploaded file can be sent straight back. Rocket drops the extension from `TempFile::name`, so this crate puts it back from the media type of the upload.
+An uploaded file can be sent straight back.
+Rocket drops the extension from `TempFile::name`, so this crate uses the original file name to recover it and falls back to the upload's media type.
 
 ```rust
 use std::io;
@@ -113,8 +121,8 @@ use std::{
 use educe::Educe;
 use mime::Mime;
 use rocket::{
-    fs::TempFile,
-    http::Status,
+    fs::{FileName, TempFile},
+    http::{Method, Status},
     request::Request,
     response::{self, Builder, Responder, Response},
     tokio::{fs::File as AsyncFile, io::AsyncRead},
@@ -148,11 +156,11 @@ enum EtaggedRawResponseData<'o> {
 /// An [`EtaggedRawResponsePro`] that borrows nothing, which is what a route usually returns.
 pub type EtaggedRawResponse = EtaggedRawResponsePro<'static>;
 
-/// The responder that makes a client display the body as it is, and that answers `304 Not Modified` when the client already holds the very same body.
+/// A responder for raw data that checks the request's `If-None-Match` header.
 #[derive(Debug)]
 pub struct EtaggedRawResponsePro<'o> {
     etag:         EntityTag<'static>,
-    /// `None` once the entity-tag has matched the `if-none-match` header, which is what turns the response into a `304 Not Modified`.
+    /// `None` when the entity-tag matches `If-None-Match`.
     data:         Option<EtaggedRawResponseData<'o>>,
     file_name:    Option<String>,
     content_type: Option<Mime>,
@@ -194,7 +202,8 @@ impl<'o> EtaggedRawResponsePro<'o> {
         Self::new(etag_if_none_match, etag, || EtaggedRawResponseData::Bytes(Cow::Owned(vec)))
     }
 
-    /// Create an `EtaggedRawResponse` instance from a reader whose length is not known in advance, so no `Content-Length` header is sent. The entity-tag has to be provided because a reader cannot be read twice.
+    /// Create an `EtaggedRawResponse` instance from a reader whose length is not known in advance, so no `Content-Length` header is sent.
+    /// The entity-tag has to be provided because a reader cannot be read twice.
     #[inline]
     pub fn from_reader<R: AsyncRead + Send + Unpin + 'o>(
         etag_if_none_match: &EtagIfNoneMatch<'_>,
@@ -207,7 +216,8 @@ impl<'o> EtaggedRawResponsePro<'o> {
         })
     }
 
-    /// Create an `EtaggedRawResponse` instance from a reader whose length is already known, so a `Content-Length` header can be sent. The entity-tag has to be provided because a reader cannot be read twice.
+    /// Create an `EtaggedRawResponse` instance from a reader whose length is already known, so a `Content-Length` header can be sent.
+    /// The entity-tag has to be provided because a reader cannot be read twice.
     #[inline]
     pub fn from_reader_sized<R: AsyncRead + Send + Unpin + 'o>(
         etag_if_none_match: &EtagIfNoneMatch<'_>,
@@ -221,7 +231,10 @@ impl<'o> EtaggedRawResponsePro<'o> {
         })
     }
 
-    /// Create an `EtaggedRawResponse` instance from a path of a file, which is opened right away. The entity-tag is computed from the metadata of the file rather than from its content.
+    /// Open a file and build a weak entity-tag from its length and modification time.
+    ///
+    /// Changes that keep both values can reuse the same tag.
+    /// Use [`Self::from_reader_sized`] to supply your own entity-tag.
     pub async fn from_file<P: AsRef<Path>>(
         etag_if_none_match: &EtagIfNoneMatch<'_>,
         path: P,
@@ -229,7 +242,6 @@ impl<'o> EtaggedRawResponsePro<'o> {
         let path = path.as_ref();
 
         let file = AsyncFile::open(path).await?;
-        // The metadata is read from the very handle the body is going to be read from, so the entity-tag cannot end up describing another version of the file.
         let metadata = file.metadata().await?;
 
         let etag = EntityTag::from_file_meta(&metadata);
@@ -241,9 +253,11 @@ impl<'o> EtaggedRawResponsePro<'o> {
         }))
     }
 
-    /// Create an `EtaggedRawResponse` instance from a `TempFile`, which is opened right away when it is stored on disk. The entity-tag is computed from the metadata of such a file rather than from its content.
+    /// Create a response from a temporary file.
     ///
-    /// A `304 Not Modified` is answered whenever the entity-tag matches, even though a request whose method is neither `GET` nor `HEAD` is meant to be answered with a `412 Precondition Failed` instead.
+    /// For a file on disk, the weak entity-tag uses the length and modification time.
+    /// Changes that keep both values can reuse the same tag.
+    /// A file buffered in memory gets a tag based on its bytes.
     pub async fn from_temp_file(
         etag_if_none_match: &EtagIfNoneMatch<'_>,
         temp_file: TempFile<'o>,
@@ -253,7 +267,6 @@ impl<'o> EtaggedRawResponsePro<'o> {
                 path, ..
             } => {
                 let async_file = AsyncFile::open(path).await?;
-                // The metadata is read from the very handle the body is going to be read from, so the entity-tag cannot end up describing another version of the file.
                 let metadata = async_file.metadata().await?;
 
                 (EntityTag::from_file_meta(&metadata), async_file, metadata.len())
@@ -277,7 +290,8 @@ impl<'o> EtaggedRawResponsePro<'o> {
         }))
     }
 
-    /// Set the file name the client should display the body as. An empty name sends no name at all.
+    /// Set the file name the client should display the body as.
+    /// An empty name sends no name at all.
     #[inline]
     #[must_use]
     pub fn file_name<S: Into<String>>(mut self, file_name: S) -> Self {
@@ -394,48 +408,58 @@ fn write_content_type(
         return;
     }
 
-    let extension = file_name.map(Path::new).and_then(Path::extension).or_else(|| match data {
-        // The file name may have been replaced with one that carries no extension, but the path still knows what the file is.
+    let guess = |extension| mime_guess::from_ext(extension).first_raw();
+    let extension = file_name.map(Path::new).and_then(Path::extension).and_then(OsStr::to_str);
+    if let Some(content_type) = extension.and_then(guess) {
+        response.raw_header("Content-Type", content_type);
+
+        return;
+    }
+
+    let source_extension = match data {
         EtaggedRawResponseData::File {
             path, ..
-        } => path.extension(),
+        } => path.extension().and_then(OsStr::to_str),
         _ => None,
-    });
+    };
 
-    // Nothing says what the body is. Send no media type at all and let the client sniff it, rather than send `application/octet-stream` and make the client save a body that is meant to be displayed.
-    if let Some(extension) = extension.and_then(OsStr::to_str) {
-        // A guess is a `&'static str`, so the header does not have to be built from an owned `Mime`.
-        let content_type = mime_guess::from_ext(extension).first_raw().unwrap_or(OCTET_STREAM);
-
-        response.raw_header("Content-Type", content_type);
+    // If there is no extension, let the client detect the media type.
+    if extension.is_some() || source_extension.is_some() {
+        response
+            .raw_header("Content-Type", source_extension.and_then(guess).unwrap_or(OCTET_STREAM));
     }
 }
 
-/// Rocket strips every extension from `TempFile::name`, so append back the one the client sent, or the one that belongs to the uploaded media type.
-fn temp_file_name(temp_file: &TempFile<'_>) -> Option<String> {
-    let name = temp_file.name()?;
+/// Recover the file name and its extensions from the upload.
+fn temp_file_name<'a>(temp_file: &'a TempFile<'_>) -> Option<Cow<'a, str>> {
+    let raw_name = temp_file.raw_name()?.dangerous_unsafe_unsanitized_raw().as_str();
+    let file_name = raw_name.rsplit(['/', '\\']).next()?;
+    let name = FileName::new(file_name).as_str()?;
 
-    // Only the extension is read from the raw name, so any path a client may have sent is still dropped.
-    let raw_extension = temp_file.raw_name().and_then(|raw_name| {
-        Path::new(raw_name.dangerous_unsafe_unsanitized_raw().as_str()).extension()?.to_str()
-    });
+    if let Some(suffix) = file_name.strip_prefix(name).and_then(|suffix| suffix.strip_prefix('.'))
+        && suffix.split('.').all(|part| FileName::new(part).is_safe())
+    {
+        return Some(Cow::Borrowed(file_name));
+    }
 
-    if let Some(extension) = raw_extension {
-        return Some(format!("{name}.{extension}"));
+    if let Some(extension) = Path::new(file_name).extension().and_then(OsStr::to_str)
+        && FileName::new(extension).is_safe()
+    {
+        return Some(Cow::Owned(format!("{name}.{extension}")));
     }
 
     match temp_file.content_type().and_then(|content_type| content_type.extension()) {
-        Some(extension) => Some(format!("{name}.{extension}")),
-        None => Some(String::from(name)),
+        Some(extension) => Some(Cow::Owned(format!("{name}.{extension}"))),
+        None => Some(Cow::Borrowed(name)),
     }
 }
 
 /// The file name the source suggests, used when the caller sets none.
-fn default_file_name(data: &EtaggedRawResponseData<'_>) -> Option<String> {
+fn default_file_name<'a>(data: &'a EtaggedRawResponseData<'_>) -> Option<Cow<'a, str>> {
     match data {
         EtaggedRawResponseData::File {
             path, ..
-        } => path.file_name().map(|file_name| file_name.to_string_lossy().into_owned()),
+        } => path.file_name().map(OsStr::to_string_lossy),
         EtaggedRawResponseData::TempFile {
             temp_file, ..
         } => temp_file_name(temp_file),
@@ -444,7 +468,7 @@ fn default_file_name(data: &EtaggedRawResponseData<'_>) -> Option<String> {
 }
 
 impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponsePro<'o> {
-    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'o> {
+    fn respond_to(self, request: &'r Request<'_>) -> response::Result<'o> {
         let EtaggedRawResponsePro {
             etag,
             data,
@@ -455,19 +479,24 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponsePro<'o> {
 
         let mut response = Response::build();
 
-        // A `304 Not Modified` has to carry the entity-tag a `200 OK` would have carried, otherwise a cache cannot tell which representation it has just revalidated.
+        // `304` and `412` responses also carry the entity-tag, so the client can tell which representation matched.
         response.raw_header(EntityTag::HEADER_NAME, etag.to_string());
 
         let Some(data) = data else {
-            response.status(Status::NotModified);
+            response.status(match request.method() {
+                Method::Get | Method::Head => Status::NotModified,
+                _ => Status::PreconditionFailed,
+            });
 
             return response.ok();
         };
 
-        let file_name = file_name.or_else(|| default_file_name(&data));
+        {
+            let file_name = file_name.map(Cow::Owned).or_else(|| default_file_name(&data));
 
-        write_content_disposition(&mut response, inline, file_name.as_deref());
-        write_content_type(&mut response, content_type, &data, file_name.as_deref());
+            write_content_disposition(&mut response, inline, file_name.as_deref());
+            write_content_type(&mut response, content_type, &data, file_name.as_deref());
+        }
 
         match data {
             EtaggedRawResponseData::Bytes(data) => {
@@ -488,8 +517,12 @@ impl<'r, 'o: 'r> Responder<'r, 'o> for EtaggedRawResponsePro<'o> {
                 len,
                 ..
             } => {
-                // The length is already known, so it does not have to be found again by seeking to the end of the file. A length that does not fit in a `usize` is left to be handled that way.
-                response.sized_body(usize::try_from(len).ok(), file);
+                if let Ok(len) = usize::try_from(len) {
+                    response.sized_body(len, file);
+                } else {
+                    // Keep the full length on 32-bit targets.
+                    response.raw_header("Content-Length", len.to_string()).streamed_body(file);
+                }
             },
             EtaggedRawResponseData::TempFile {
                 temp_file,
